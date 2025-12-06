@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Pebble"
 include(":app")
- 
+include(":core")
