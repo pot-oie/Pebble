@@ -14,7 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
 import android.view.WindowManager
-import com.pot.pebble.core.strategy.SimpleGravityStrategy
+import com.pot.pebble.core.strategy.JBox2DStrategy // 确保这里引用的是 JBox2DStrategy
 import com.pot.pebble.ui.overlay.PebbleOverlayView
 
 class InterferenceService : Service(), SensorEventListener {
@@ -23,75 +23,85 @@ class InterferenceService : Service(), SensorEventListener {
     private lateinit var overlayView: PebbleOverlayView
     private lateinit var sensorManager: SensorManager
 
-    // 核心策略
-    private val strategy = SimpleGravityStrategy()
+    // 策略切换为 JBox2DStrategy
+    private val strategy = JBox2DStrategy()
 
-    // 游戏循环相关
-    private val handler = Handler(Looper.getMainLooper())
-    private var lastFrameTime = 0L
-    private var currentGx = 0f
-    private var currentGy = 0f // 默认重力
+    // 🔴 变化 1: 只需要一个主线程 Handler 用来发 UI 更新指令
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-    // 循环任务
-    private val loopRunnable = object : Runnable {
-        override fun run() {
-            val now = System.currentTimeMillis()
-            val dt = if (lastFrameTime > 0) now - lastFrameTime else 16L
-            lastFrameTime = now
+    // 🔴 变化 2: 增加一个线程控制标记
+    private var isRunning = false
 
-            // 1. Core 计算下一帧
-            val renderData = strategy.update(dt, currentGx, currentGy)
+    // 🔴 变化 3: 独立的物理计算线程
+    private val gameThread = Thread {
+        while (isRunning) {
+            val start = System.currentTimeMillis()
 
-            // 2. UI 更新
-            overlayView.updateState(renderData)
+            // 1. 计算 (现在有锁了，很安全)
+            val renderData = strategy.update(16, currentGx, currentGy) // dt 传多少无所谓了，内部固定了
 
-            // 3. 只有 Service 活着才继续循环
-            handler.postDelayed(this, 16) // ~60 FPS
+            // 2. 发送给 UI (现在发的是快照，很安全)
+            mainHandler.post {
+                overlayView.updateState(renderData)
+            }
+
+            // 3. 稳定帧率 (Sleep)
+            // 这一步是为了不让 CPU 100% 满负荷空转，给电池省点电
+            val executionTime = System.currentTimeMillis() - start
+            val targetDelay = 16L // 目标 60FPS
+            if (executionTime < targetDelay) {
+                try {
+                    Thread.sleep(targetDelay - executionTime)
+                } catch (e: Exception) {}
+            }
         }
     }
+
+    // 传感器数据 (简单做个 volatile 保证线程可见性)
+    @Volatile private var currentGx = 0f
+    @Volatile private var currentGy = 0f
 
     override fun onCreate() {
         super.onCreate()
 
-        // 1. 初始化传感器
+        // ... (传感器和 WindowManager 初始化代码保持不变) ...
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
 
-        // 2. 初始化悬浮窗 UI
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         overlayView = PebbleOverlayView(this)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            // Android O (8.0) 以上必须用 TYPE_APPLICATION_OVERLAY
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
-            // 关键 Flag：不获取焦点(FLAG_NOT_FOCUSABLE) + 允许触摸穿透(FLAG_NOT_TOUCHABLE)
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.LEFT
-
         windowManager.addView(overlayView, params)
 
-        // 3. 初始化 Core
+        // 初始化策略
         val metrics = resources.displayMetrics
         strategy.setScreenSize(metrics.widthPixels.toFloat(), metrics.heightPixels.toFloat())
         strategy.onStart()
 
-        // 4. 启动循环
-        lastFrameTime = System.currentTimeMillis()
-        handler.post(loopRunnable)
+        // 🔴 变化 4: 启动线程
+        isRunning = true
+        gameThread.start()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacks(loopRunnable)
+        // 🔴 变化 5: 停止线程
+        isRunning = false
+        // 等待线程安全结束（可选，Service destroy 很快）
+
         windowManager.removeView(overlayView)
         sensorManager.unregisterListener(this)
         strategy.onStop()
@@ -99,10 +109,8 @@ class InterferenceService : Service(), SensorEventListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // 传感器回调
     override fun onSensorChanged(event: SensorEvent?) {
         event?.let {
-            // 简单的映射：手机竖着拿时，Y轴重力向下
             currentGx = it.values[0]
             currentGy = it.values[1]
         }

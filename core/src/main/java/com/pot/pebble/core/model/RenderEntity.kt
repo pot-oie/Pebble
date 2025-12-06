@@ -5,11 +5,11 @@ package com.pot.pebble.core.model
  * 物理引擎告诉 UI：在什么位置画什么东西
  */
 data class RenderEntity(
-    val id: Long,
-    val x: Float,
-    val y: Float,
-    val rotation: Float,
-    val type: EntityType
+    var id: Long = 0,
+    var x: Float = 0f,
+    var y: Float = 0f,
+    var rotation: Float = 0f,
+    var type: EntityType = EntityType.CIRCLE
 )
 
 enum class EntityType {
