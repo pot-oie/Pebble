@@ -7,14 +7,15 @@ import android.content.Context
 import android.content.Intent
 import android.os.Process
 import android.provider.Settings
+import android.util.Log
 
 class AppUsageMonitor(private val context: Context) {
 
     private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-    /**
-     * 检查是否有权限
-     */
+    // 🔥 新增：用于缓存上一次检测到的应用包名
+    private var lastKnownPackage: String? = null
+
     fun hasPermission(): Boolean {
         val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
         val mode = appOps.checkOpNoThrow(
@@ -25,9 +26,6 @@ class AppUsageMonitor(private val context: Context) {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    /**
-     * 跳转到授权页面
-     */
     fun requestPermission() {
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -36,32 +34,50 @@ class AppUsageMonitor(private val context: Context) {
 
     /**
      * 获取当前前台的应用包名
-     * 原理：用 queryEvents 查询系统事件流，精准捕获“Activity 移动到前台”的瞬间
+     * 改进策略：
+     * 1. 如果是第一次查（lastKnownPackage == null），查过去 1 小时，确保能拿到长停留应用。
+     * 2. 如果已经有记录，只查过去 1 分钟（节省性能）。
+     * 3. 如果查不到新事件，说明用户没有切换应用，直接返回上一次的包名。
      */
     fun getCurrentTopPackage(): String? {
         val endTime = System.currentTimeMillis()
-        // 查最近 1 分钟的事件（范围给大一点没关系，因为我们会找最新的那个）
-        val startTime = endTime - 60 * 1000
 
-        val events = usageStatsManager.queryEvents(startTime, endTime) ?: return null
+        // 🔥 动态调整时间窗口：
+        // 如果我们不知道当前是谁(刚启动)，就查久一点(1小时)以防漏掉；
+        // 如果我们已经知道当前是谁，只需要查最近(1分钟)有没有发生切换事件。
+        val timeRange = if (lastKnownPackage == null) {
+            60 * 60 * 1000L // 1小时
+        } else {
+            60 * 1000L      // 1分钟
+        }
+
+        val startTime = endTime - timeRange
+
+        val events = usageStatsManager.queryEvents(startTime, endTime) ?: return lastKnownPackage
 
         val event = UsageEvents.Event()
-        var lastPackageName: String? = null
-        var lastEventTime = 0L
+        var latestEventTime = 0L
+        var foundNewPackage: String? = null
 
-        // 遍历这1分钟内发生的所有事件
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            // 我们只关心“移动到前台 (MOVE_TO_FOREGROUND)”这件事
+            // 只关注“移动到前台”事件
             if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                // 找到发生时间最晚（最新）的那一次
-                if (event.timeStamp > lastEventTime) {
-                    lastEventTime = event.timeStamp
-                    lastPackageName = event.packageName
+                if (event.timeStamp > latestEventTime) {
+                    latestEventTime = event.timeStamp
+                    foundNewPackage = event.packageName
                 }
             }
         }
 
-        return lastPackageName
+        // 逻辑判定：
+        return if (foundNewPackage != null) {
+            // 发现了新应用切换，更新缓存
+            lastKnownPackage = foundNewPackage
+            foundNewPackage
+        } else {
+            // 最近 1 分钟没有切换，说明用户还在原来的应用里，返回缓存
+            lastKnownPackage
+        }
     }
 }

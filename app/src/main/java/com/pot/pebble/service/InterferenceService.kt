@@ -9,10 +9,15 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.IBinder
 import com.pot.pebble.core.strategy.JBox2DStrategy
+import com.pot.pebble.data.AppDatabase
+import com.pot.pebble.data.repository.AppScanner
 import com.pot.pebble.monitor.AppUsageMonitor
 import com.pot.pebble.service.helper.NotificationHelper
 import com.pot.pebble.service.helper.OverlayManager
 import com.pot.pebble.service.logic.GameEngine
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class InterferenceService : Service(), SensorEventListener {
 
@@ -23,6 +28,8 @@ class InterferenceService : Service(), SensorEventListener {
 
     // 保持 Strategy 的引用，传给 Engine
     private val strategy = JBox2DStrategy()
+
+    private lateinit var database: AppDatabase
 
     override fun onCreate() {
         super.onCreate()
@@ -45,7 +52,7 @@ class InterferenceService : Service(), SensorEventListener {
             metrics.widthPixels.toFloat(),
             metrics.heightPixels.toFloat(),
             statusBarHeight.toFloat(),
-            navBarHeight.toFloat() + 100f
+            navBarHeight.toFloat() + 20f
         )
         strategy.onStart()
 
@@ -58,6 +65,21 @@ class InterferenceService : Service(), SensorEventListener {
         val usageMonitor = AppUsageMonitor(this)
         gameEngine = GameEngine(strategy, usageMonitor, overlayManager)
         gameEngine.start()
+
+        database = AppDatabase.getDatabase(this)
+
+        // 启动协程去加载黑名单
+        CoroutineScope(Dispatchers.IO).launch {
+            // 1. 先同步一次应用列表（确保新装的App能显示）
+            AppScanner(applicationContext, database.appConfigDao()).syncInstalledApps()
+
+            // 2. 获取黑名单
+            val blackList = database.appConfigDao().getBlacklistedPackageList()
+
+            // 3. 传给 GameEngine
+            // 注意：你需要修改 GameEngine，让它支持 updateBlacklist() 方法
+            gameEngine.updateBlacklist(blackList.toSet())
+        }
     }
 
     // 【新增辅助方法】获取状态栏高度
