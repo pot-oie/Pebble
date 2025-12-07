@@ -17,18 +17,20 @@ class JBox2DStrategy : InterferenceStrategy {
         isInitialized = true
     }
 
+    // 供外部调用，动态生成一个石头
+    fun addRandomRock() {
+        if (!isInitialized) return
+
+        physics.createRock(
+            xPx = Random.nextFloat() * screenW,
+            yPx = -50f, // 从屏幕外刚刚好的位置掉下来
+            radiusPx = 30f + Random.nextFloat() * 30f // 大小随机
+        )
+    }
+
     override fun onStart() {
         // 如果还没初始化屏幕尺寸，先不生成
         if (!isInitialized) return
-
-        // 生成 10 个石头
-        repeat(10) {
-            physics.createRock(
-                xPx = Random.nextFloat() * screenW, // 随机 X
-                yPx = -100f - it * 100f,            // 从屏幕上方不同的高度掉下来
-                radiusPx = 30f + Random.nextFloat() * 20f // 随机大小 (30px ~ 50px)
-            )
-        }
     }
 
     override fun update(dt: Long, gx: Float, gy: Float): List<RenderEntity> {

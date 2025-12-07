@@ -88,6 +88,17 @@ class PhysicsManager {
                     entity.rotation = Math.toDegrees(body.angle.toDouble()).toFloat()
                     entity.type = EntityType.CIRCLE
 
+                    // 👇 新增：从 Fixture 获取半径 (米 -> 像素)
+                    // 注意：Box2D 的 m_radius 是私有字段，但 shape.radius 是公开的
+                    val fixture = body.fixtureList
+                    if (fixture != null && fixture.shape is CircleShape) {
+                        val shape = fixture.shape as CircleShape
+                        entity.radius = shape.radius * PPM
+                    } else {
+                        // 默认值，防崩溃
+                        entity.radius = 30f
+                    }
+
                     index++
                 }
                 body = body.next

@@ -9,7 +9,8 @@ data class RenderEntity(
     var x: Float = 0f,
     var y: Float = 0f,
     var rotation: Float = 0f,
-    var type: EntityType = EntityType.CIRCLE
+    var type: EntityType = EntityType.CIRCLE,
+    var radius: Float = 0f
 )
 
 enum class EntityType {
