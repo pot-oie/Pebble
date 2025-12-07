@@ -83,6 +83,17 @@ class GameEngine(
         isRunning = false
     }
 
+    /**
+     * 清空所有掉落物
+     */
+    fun clearRocks() {
+        // 必须在主线程或者与 update 相同的锁机制下调用，防止多线程冲突
+        // 这里我们在 update 循环里已经加了 try-catch 护盾，
+        // 但为了安全，我们在 strategy 内部操作，或者简单点：
+        // 直接调用 strategy 的清空方法 (我们需要去 strategy 加一个)
+        strategy.clearAllBodies()
+    }
+
     private fun processGameLogic() {
         val now = System.currentTimeMillis()
 

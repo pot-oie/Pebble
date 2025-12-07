@@ -27,10 +27,9 @@ class JBox2DStrategy : InterferenceStrategy {
         )
     }
 
-    // 【新增】获取当前石头数量
-    fun getRockCount(): Int {
-        if (!isInitialized) return 0
-        return physics.getDynamicBodyCount()
+    fun clearAllBodies() {
+        if (!isInitialized) return
+        physics.clearDynamicBodies()
     }
 
     fun isFull(): Boolean {

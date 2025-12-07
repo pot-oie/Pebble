@@ -11,8 +11,10 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -23,7 +25,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -43,12 +44,14 @@ fun GuideScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val monitor = remember { AppUsageMonitor(context) }
 
+    // 滚动状态
+    val scrollState = rememberScrollState()
+
     // 状态追踪
     var hasOverlayPermission by remember { mutableStateOf(false) }
     var hasUsagePermission by remember { mutableStateOf(false) }
     var isIgnoringBatteryOpt by remember { mutableStateOf(false) }
 
-    // 检查权限的函数
     fun checkPermissions() {
         hasOverlayPermission = Settings.canDrawOverlays(context)
         hasUsagePermission = monitor.hasPermission()
@@ -60,130 +63,134 @@ fun GuideScreen(
         }
     }
 
-    // 监听生命周期：当用户从设置页返回 APP 时，自动刷新状态
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                checkPermissions()
-            }
+            if (event == Lifecycle.Event.ON_RESUME) checkPermissions()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(NatureBeige)
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Spacer(modifier = Modifier.height(20.dp))
-
-        Text(
-            text = "开始之前的准备",
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Text(
-            text = "为了让 Pebble 稳定运行，我们需要一些特殊的权限。",
-            fontSize = 16.sp,
-            color = Color.Gray
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // 1. 核心权限卡片
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("必要权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
-                Spacer(modifier = Modifier.height(12.dp))
-
-                PermissionItem(
-                    title = "显示悬浮窗",
-                    desc = "用于显示落石",
-                    isGranted = hasOverlayPermission,
-                    onClick = {
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
-                        context.startActivity(intent)
-                    }
-                )
-                Divider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
-                PermissionItem(
-                    title = "访问使用记录",
-                    desc = "用于识别当前应用",
-                    isGranted = hasUsagePermission,
-                    onClick = { monitor.requestPermission() }
-                )
+    Scaffold(
+        containerColor = NatureBeige,
+        // 🔥 按钮固定在底部
+        bottomBar = {
+            Surface(
+                color = NatureBeige,
+                shadowElevation = 8.dp
+            ) {
+                Button(
+                    onClick = onAllGranted,
+                    enabled = hasOverlayPermission && hasUsagePermission,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MossGreen,
+                        disabledContainerColor = Color.Gray.copy(alpha = 0.3f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                        .height(56.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("进入花园", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
-
-        // 2. 稳定性设置卡片 (针对小米等系统)
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
+    ) { innerPadding ->
+        // 🔥 内容区域可滚动
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(scrollState)
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("防杀设置 (推荐)", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
-                Text("防止服务被系统误杀", fontSize = 12.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(10.dp))
 
-                Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "开始之前的准备",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = "为了让 Pebble 稳定运行，我们需要一些特殊的权限。",
+                fontSize = 16.sp,
+                color = Color.Gray
+            )
 
-                PermissionItem(
-                    title = "电池优化 (无限制)",
-                    desc = "允许后台运行",
-                    isGranted = isIgnoringBatteryOpt,
-                    onClick = {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                            try {
-                                context.startActivity(intent)
-                                Toast.makeText(context, "请找到 Pebble 并选择【无限制】", Toast.LENGTH_LONG).show()
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "无法打开电池优化设置", Toast.LENGTH_SHORT).show()
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 1. 必要权限
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("必要权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    PermissionItem(
+                        title = "显示悬浮窗",
+                        desc = "用于显示落石",
+                        isGranted = hasOverlayPermission,
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                            context.startActivity(intent)
+                        }
+                    )
+                    HorizontalDivider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
+                    PermissionItem(
+                        title = "访问使用记录",
+                        desc = "用于识别当前应用",
+                        isGranted = hasUsagePermission,
+                        onClick = { monitor.requestPermission() }
+                    )
+                }
+            }
+
+            // 2. 防杀设置
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("防杀设置 (推荐)", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
+                    Text("防止服务被系统误杀", fontSize = 12.sp, color = Color.Gray)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    PermissionItem(
+                        title = "电池优化 (无限制)",
+                        desc = "允许后台运行",
+                        isGranted = isIgnoringBatteryOpt,
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                try { context.startActivity(intent) } catch (e: Exception) { }
                             }
                         }
-                    }
-                )
-
-                Divider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
-
-                // 自启动没有标准 API，只能尽量跳转或者引导去应用详情页
-                SettingsItem(
-                    title = "自启动权限",
-                    desc = "小米/OV必须开启",
-                    onClick = {
-                        openAutoStartSettings(context)
-                    }
-                )
+                    )
+                    HorizontalDivider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
+                    SettingsItem(
+                        title = "自启动权限",
+                        desc = "小米/OV必须开启",
+                        onClick = { openAutoStartSettings(context) }
+                    )
+                }
             }
-        }
 
-        Spacer(modifier = Modifier.weight(1f))
-
-        // 3. 进入按钮
-        Button(
-            onClick = onAllGranted,
-            enabled = hasOverlayPermission && hasUsagePermission, // 只有核心权限有了才能进
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MossGreen,
-                disabledContainerColor = Color.Gray.copy(alpha = 0.3f)
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Text("进入花园", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            // 底部留白
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
+
+// ==========================================
+// ⬇️ 补回了之前缺失的辅助组件代码 ⬇️
+// ==========================================
 
 @Composable
 fun PermissionItem(title: String, desc: String, isGranted: Boolean, onClick: () -> Unit) {

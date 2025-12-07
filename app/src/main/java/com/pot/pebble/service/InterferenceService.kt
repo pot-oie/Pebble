@@ -31,6 +31,11 @@ class InterferenceService : Service(), SensorEventListener {
 
     private lateinit var database: AppDatabase
 
+    // 定义指令常量
+    companion object {
+        const val ACTION_CLEAR_ROCKS = "com.pot.pebble.action.CLEAR"
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -80,9 +85,25 @@ class InterferenceService : Service(), SensorEventListener {
             // 注意：你需要修改 GameEngine，让它支持 updateBlacklist() 方法
             gameEngine.updateBlacklist(blackList.toSet())
         }
+
+        // 状态同步：告诉 UI 启动
+        ServiceState.isRunning.value = true
     }
 
-    // 【新增辅助方法】获取状态栏高度
+    // 处理指令
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CLEAR_ROCKS) {
+            // 收到清空指令，调用引擎
+            if (::gameEngine.isInitialized) {
+                gameEngine.clearRocks()
+            }
+        }
+
+        // 保持原有逻辑：如果是系统杀掉重启，尝试重建
+        return START_STICKY
+    }
+
+    // 获取状态栏高度
     private fun getStatusBarHeight(): Int {
         var result = 0
         val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
@@ -92,7 +113,7 @@ class InterferenceService : Service(), SensorEventListener {
         return result
     }
 
-    // 【新增辅助方法】获取导航栏高度
+    // 获取导航栏高度
     private fun getNavigationBarHeight(): Int {
         var result = 0
         val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
@@ -108,6 +129,7 @@ class InterferenceService : Service(), SensorEventListener {
         overlayManager.destroy()
         sensorManager.unregisterListener(this)
         strategy.onStop()
+        ServiceState.isRunning.value = false
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

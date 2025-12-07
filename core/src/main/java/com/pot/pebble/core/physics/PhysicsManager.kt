@@ -195,4 +195,28 @@ class PhysicsManager {
         shape.setAsBox(width / 2, height / 2)
         body.createFixture(shape, 0f)
     }
+
+    // 清除所有动态物体（石头），保留墙壁和地板
+    fun clearDynamicBodies() {
+        synchronized(lock) {
+            var body = world.bodyList
+            // 使用临时列表存储待删除的 body，防止遍历时修改集合报错
+            val bodiesToRemove = ArrayList<org.jbox2d.dynamics.Body>()
+
+            while (body != null) {
+                // 只删除动态物体 (石头)，别把墙拆了
+                if (body.type == BodyType.DYNAMIC) {
+                    bodiesToRemove.add(body)
+                }
+                body = body.next
+            }
+
+            for (b in bodiesToRemove) {
+                world.destroyBody(b)
+            }
+
+            // 清空缓存池
+            cachedEntities.clear()
+        }
+    }
 }
