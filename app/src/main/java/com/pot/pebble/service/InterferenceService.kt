@@ -37,7 +37,16 @@ class InterferenceService : Service(), SensorEventListener {
 
         // 3. 初始化物理策略
         val metrics = resources.displayMetrics
-        strategy.setScreenSize(metrics.widthPixels.toFloat(), metrics.heightPixels.toFloat())
+        val statusBarHeight = getStatusBarHeight()
+        val navBarHeight = getNavigationBarHeight()
+
+        // 将屏幕总高度，以及上下边距传给策略
+        strategy.setScreenSize(
+            metrics.widthPixels.toFloat(),
+            metrics.heightPixels.toFloat(),
+            statusBarHeight.toFloat(),
+            navBarHeight.toFloat() + 100f
+        )
         strategy.onStart()
 
         // 4. 初始化传感器
@@ -49,6 +58,26 @@ class InterferenceService : Service(), SensorEventListener {
         val usageMonitor = AppUsageMonitor(this)
         gameEngine = GameEngine(strategy, usageMonitor, overlayManager)
         gameEngine.start()
+    }
+
+    // 【新增辅助方法】获取状态栏高度
+    private fun getStatusBarHeight(): Int {
+        var result = 0
+        val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (resourceId > 0) {
+            result = resources.getDimensionPixelSize(resourceId)
+        }
+        return result
+    }
+
+    // 【新增辅助方法】获取导航栏高度
+    private fun getNavigationBarHeight(): Int {
+        var result = 0
+        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        if (resourceId > 0) {
+            result = resources.getDimensionPixelSize(resourceId)
+        }
+        return result
     }
 
     override fun onDestroy() {

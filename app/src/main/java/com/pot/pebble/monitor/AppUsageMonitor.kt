@@ -1,6 +1,7 @@
 package com.pot.pebble.monitor
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
@@ -35,20 +36,32 @@ class AppUsageMonitor(private val context: Context) {
 
     /**
      * 获取当前前台的应用包名
-     * 原理：查询最近 2 秒内的使用记录，按“最后使用时间”排序，取第一个
+     * 原理：用 queryEvents 查询系统事件流，精准捕获“Activity 移动到前台”的瞬间
      */
     fun getCurrentTopPackage(): String? {
         val endTime = System.currentTimeMillis()
-        val startTime = endTime - 2000 // 查最近 2 秒
+        // 查最近 1 分钟的事件（范围给大一点没关系，因为我们会找最新的那个）
+        val startTime = endTime - 60 * 1000
 
-        val usageStatsList = usageStatsManager.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY, startTime, endTime
-        )
+        val events = usageStatsManager.queryEvents(startTime, endTime) ?: return null
 
-        if (usageStatsList.isNullOrEmpty()) return null
+        val event = UsageEvents.Event()
+        var lastPackageName: String? = null
+        var lastEventTime = 0L
 
-        // 找到最后使用时间最近的那个 APP
-        val sortedStats = usageStatsList.sortedByDescending { it.lastTimeUsed }
-        return sortedStats.firstOrNull()?.packageName
+        // 遍历这1分钟内发生的所有事件
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            // 我们只关心“移动到前台 (MOVE_TO_FOREGROUND)”这件事
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                // 找到发生时间最晚（最新）的那一次
+                if (event.timeStamp > lastEventTime) {
+                    lastEventTime = event.timeStamp
+                    lastPackageName = event.packageName
+                }
+            }
+        }
+
+        return lastPackageName
     }
 }

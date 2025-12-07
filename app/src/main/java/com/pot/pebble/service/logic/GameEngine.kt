@@ -17,7 +17,7 @@ class GameEngine(
 
     // 配置参数
     private val PUNISH_INTERVAL = 2000L // 2秒生成一个
-    private val GRACE_PERIOD = 3000L    // 3秒宽限期 (防闪烁关键！)
+    private val GRACE_PERIOD = 3000L    // 宽限期
 
     // 状态变量
     private var punishTimer = 0L
@@ -35,6 +35,8 @@ class GameEngine(
     // 物理参数
     @Volatile var currentGx = 0f
     @Volatile var currentGy = 0f
+    // 默认向下重力
+    private val MIN_GRAVITY = 5.0f
 
     private val gameThread = Thread {
         while (isRunning) {
@@ -42,6 +44,10 @@ class GameEngine(
 
             // 1. 逻辑检测 (每帧都跑，但在内部做时间控制)
             processGameLogic()
+
+            val finalGy = if (currentGy < MIN_GRAVITY)
+                MIN_GRAVITY
+            else currentGy
 
             // 2. 物理更新
             val renderData = strategy.update(16, currentGx, currentGy)
@@ -72,9 +78,15 @@ class GameEngine(
         // 限制检测频率：每 500ms 检测一次包名足够了，太快也没用
         if (System.currentTimeMillis() % 500 < 20) {
             val currentPkg = usageMonitor.getCurrentTopPackage()
+                ?:
+                // 判空保护
+                // 如果获取失败，直接跳过本次检测，保持现状
+                // 这样能防止因为系统偶尔抽风返回 null 而导致石头消失
+                return
+
             val now = System.currentTimeMillis()
 
-            if (currentPkg != null && blackList.contains(currentPkg)) {
+            if (blackList.contains(currentPkg)) {
                 // -> 正在玩黑名单应用
                 lastSeenBlacklistTime = now // 刷新最后目击时间
 
@@ -85,7 +97,9 @@ class GameEngine(
                 punishTimer += 500
                 if (punishTimer >= PUNISH_INTERVAL) {
                     punishTimer = 0
-                    strategy.addRandomRock() // 生成石头
+                    if (!strategy.isFull()) {
+                        strategy.addRandomRock()
+                    }
                 }
             } else {
                 // -> 没检测到黑名单 (可能是 null，可能是桌面，可能是瞬时切换)

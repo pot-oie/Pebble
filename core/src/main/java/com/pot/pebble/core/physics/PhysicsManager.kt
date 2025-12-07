@@ -24,15 +24,51 @@ class PhysicsManager {
     // 🔒 锁对象：用来保证计算和读取不会同时发生
     private val lock = Any()
 
-    fun setupBounds(widthPx: Float, heightPx: Float) {
+    fun setupBounds(widthPx: Float, heightPx: Float, paddingTopPx: Float, paddingBottomPx: Float) {
         synchronized(lock) {
             screenWidthMeters = widthPx / PPM
             screenHeightMeters = heightPx / PPM
-            // 清理旧的墙壁，防止重复添加（如果需要的话）
-            // 这里简化处理，直接加
-            createStaticBox(screenWidthMeters / 2, screenHeightMeters + 1f, screenWidthMeters, 2f)
-            createStaticBox(-1f, screenHeightMeters / 2, 2f, screenHeightMeters * 2)
-            createStaticBox(screenWidthMeters + 1f, screenHeightMeters / 2, 2f, screenHeightMeters * 2)
+
+            // 【修改点1】地板位置修正
+            // 原来可能抬得不够高。现在我们把地板中心放在：
+            // (屏幕高度 - 底部边距 - 地板半厚度 - 额外的安全缓冲50px)
+            // 这样石头底部会严格处于 paddingBottomPx + 50px 的位置之上
+            val safeBufferMeters = 50f / PPM
+            val bottomMeters = paddingBottomPx / PPM + safeBufferMeters
+
+            val floorHeight = 2f // 地板厚度2米
+            val floorY = screenHeightMeters - bottomMeters + (floorHeight / 2)
+
+            // 清理旧物体（简单起见这里假设只调用一次，或者你需要加清理逻辑）
+            // createStaticBox...
+
+            // 地板
+            createStaticBox(screenWidthMeters / 2, floorY, screenWidthMeters, floorHeight)
+            // 左右墙壁 (加高一点防止溢出)
+            createStaticBox(-1f, screenHeightMeters / 2, 2f, screenHeightMeters * 3)
+            createStaticBox(screenWidthMeters + 1f, screenHeightMeters / 2, 2f, screenHeightMeters * 3)
+        }
+    }
+
+    // 【新增】检测顶部是否堵住了
+    fun isTopFull(): Boolean {
+        synchronized(lock) {
+            var body = world.bodyList
+            while (body != null) {
+                if (body.type == BodyType.DYNAMIC) {
+                    val yPx = body.position.y * PPM
+                    // 如果石头处于屏幕顶部 600px 范围内
+                    if (yPx > 0 && yPx < 600) {
+                        // 并且它是基本静止的（不是刚生成正在往下冲的）
+                        // velocity 长度小于 1.0
+                        if (body.linearVelocity.length() < 1.0f) {
+                            return true
+                        }
+                    }
+                }
+                body = body.next
+            }
+            return false
         }
     }
 
@@ -48,7 +84,7 @@ class PhysicsManager {
                 this.shape = shape
                 density = 1.0f
                 friction = 0.3f
-                restitution = 0.5f
+                restitution = 0.2f
             }
             body.createFixture(fixtureDef)
             return body.hashCode().toLong()

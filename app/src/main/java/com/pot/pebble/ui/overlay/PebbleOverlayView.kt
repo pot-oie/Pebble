@@ -16,6 +16,7 @@ class PebbleOverlayView(context: Context) : View(context) {
     private val paint = Paint().apply {
         isAntiAlias = true
         isFilterBitmap = true // 开启位图滤波，旋转时锯齿更少
+        alpha = 255 // 透明度
     }
 
     private var entities: List<RenderEntity> = emptyList()

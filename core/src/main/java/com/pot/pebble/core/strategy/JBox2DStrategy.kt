@@ -11,21 +11,25 @@ class JBox2DStrategy : InterferenceStrategy {
     private var isInitialized = false
     private var screenW = 0f
 
-    fun setScreenSize(w: Float, h: Float) {
+    fun setScreenSize(w: Float, h: Float, paddingTop: Float, paddingBottom: Float) {
         this.screenW = w
-        physics.setupBounds(w, h)
+        physics.setupBounds(w, h, paddingTop, paddingBottom)
         isInitialized = true
     }
 
     // 供外部调用，动态生成一个石头
     fun addRandomRock() {
         if (!isInitialized) return
-
         physics.createRock(
             xPx = Random.nextFloat() * screenW,
-            yPx = -50f, // 从屏幕外刚刚好的位置掉下来
-            radiusPx = 30f + Random.nextFloat() * 30f // 大小随机
+            yPx = -100f,
+            radiusPx = 80f + Random.nextFloat() * 40f
         )
+    }
+
+    fun isFull(): Boolean {
+        if (!isInitialized) return false
+        return physics.isTopFull()
     }
 
     override fun onStart() {
