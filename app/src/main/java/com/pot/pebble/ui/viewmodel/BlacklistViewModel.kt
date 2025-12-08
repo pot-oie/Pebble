@@ -3,6 +3,7 @@ package com.pot.pebble.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.pot.pebble.common.SYSTEM_PROTECTED_PACKAGES
 import com.pot.pebble.data.AppDatabase
 import com.pot.pebble.data.entity.AppConfig
 import com.pot.pebble.data.repository.AppScanner
@@ -32,7 +33,13 @@ class BlacklistViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun refreshApps() {
         viewModelScope.launch {
+            // 1. 扫描安装的应用
             scanner.syncInstalledApps()
+
+            // 2. ✨ 自动修正：把误入黑名单的系统应用踢出去
+            SYSTEM_PROTECTED_PACKAGES.forEach { pkg ->
+                dao.updateStatus(pkg, false)
+            }
         }
     }
 

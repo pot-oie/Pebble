@@ -19,3 +19,21 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# 保护 Room 实体
+-keep class com.pot.pebble.data.entity.** { *; }
+-keep class com.pot.pebble.data.dao.** { *; }
+-keep class com.pot.pebble.data.AppDatabase { *; }
+
+# 保护 JBox2D 物理引擎
+-keep class org.jbox2d.** { *; }
+
+# 保护 UsageStats 相关
+-keep class android.app.usage.** { *; }
+
+# 保护协程和 Service 逻辑
+-keep class com.pot.pebble.service.** { *; }
+-keep class com.pot.pebble.monitor.** { *; }
+
+# 保留所有枚举
+-keepclassmembers enum * { *; }

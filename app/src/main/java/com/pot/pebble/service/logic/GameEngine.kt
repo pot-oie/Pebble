@@ -4,137 +4,143 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.pot.pebble.core.strategy.JBox2DStrategy
-import com.pot.pebble.monitor.AppUsageMonitor
+import com.pot.pebble.service.ServiceState
 import com.pot.pebble.service.helper.OverlayManager
+import kotlinx.coroutines.*
 
 class GameEngine(
     private val strategy: JBox2DStrategy,
-    private val usageMonitor: AppUsageMonitor,
     private val overlayManager: OverlayManager
 ) {
 
-    private var isRunning = false
+    // 协程作用域：用于监听状态流
+    private val engineScope = CoroutineScope(Dispatchers.Default)
+    private var observationJob: Job? = null
+
+    // 物理线程：只在惩罚时启动
+    private var physicsThread: Thread? = null
+    @Volatile private var isPhysicsRunning = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // 参数配置
     private val PUNISH_INTERVAL = 2000L
-    private val GRACE_PERIOD = 3000L
-    private val CHECK_INTERVAL = 500L   // 稳定的检测间隔
-
-    // 状态变量
     private var punishTimer = 0L
-    private var lastSeenBlacklistTime = 0L
-    private var lastCheckTime = 0L
 
     // 黑名单
     private var blackList: Set<String> = emptySet()
 
-    fun updateBlacklist(newSet: Set<String>) {
-        this.blackList = newSet
-        Log.d("PebbleDebug", "Blacklist updated: size=${newSet.size}")
-    }
-
+    // 传感器数据
     @Volatile var currentGx = 0f
     @Volatile var currentGy = 0f
     private val MIN_GRAVITY = 5.0f
 
-    private val gameThread = Thread {
-        Log.w("PebbleDebug", "=== Game Thread Started ===")
+    /**
+     * 启动引擎：开始监听无障碍服务的信号
+     */
+    fun start() {
+        if (observationJob?.isActive == true) return
 
-        while (isRunning) {
-            val start = System.currentTimeMillis()
+        Log.d("PebbleEngine", "Engine Started (Reactive Mode)")
 
-            // 🔥【防崩溃护盾】全包裹 try-catch
-            try {
-                processGameLogic()
-
-                val finalGy = if (currentGy < MIN_GRAVITY) MIN_GRAVITY else currentGy
-
-                // 物理更新
-                val renderData = strategy.update(16, currentGx, finalGy)
-
-                // 渲染
-                mainHandler.post { overlayManager.updateRender(renderData) }
-
-            } catch (e: Exception) {
-                // 🛑 如果发生崩溃，这里会接住，并告诉你原因！
-                Log.e("PebbleDebug", "CRASH CAUGHT! Thread stays alive. Error: ${e.message}")
-                e.printStackTrace()
-            }
-
-            // 稳帧逻辑
-            val executionTime = System.currentTimeMillis() - start
-            val targetDelay = 16L
-            if (executionTime < targetDelay) {
-                try { Thread.sleep(targetDelay - executionTime) } catch (e: Exception) {}
+        // 🔥 核心改变：不再轮询，而是观察流
+        observationJob = engineScope.launch {
+            ServiceState.currentPackage.collect { currentPkg ->
+                if (currentPkg != null) {
+                    processPackageChange(currentPkg)
+                }
             }
         }
-        Log.w("PebbleDebug", "=== Game Thread Stopped ===")
-    }
-
-    fun start() {
-        if (isRunning) return
-        isRunning = true
-        lastCheckTime = System.currentTimeMillis()
-        gameThread.start()
-    }
-
-    fun stop() {
-        isRunning = false
     }
 
     /**
-     * 清空所有掉落物
+     * 停止引擎
      */
+    fun stop() {
+        Log.d("PebbleEngine", "Engine Stopped")
+        observationJob?.cancel()
+        stopPhysicsThread()
+        mainHandler.post { overlayManager.setVisible(false) }
+    }
+
+    fun updateBlacklist(newSet: Set<String>) {
+        this.blackList = newSet
+        // 黑名单更新时，手动触发一次检查当前状态
+        val current = ServiceState.currentPackage.value
+        if (current != null) {
+            engineScope.launch { processPackageChange(current) }
+        }
+    }
+
     fun clearRocks() {
-        // 必须在主线程或者与 update 相同的锁机制下调用，防止多线程冲突
-        // 这里我们在 update 循环里已经加了 try-catch 护盾，
-        // 但为了安全，我们在 strategy 内部操作，或者简单点：
-        // 直接调用 strategy 的清空方法 (我们需要去 strategy 加一个)
         strategy.clearAllBodies()
     }
 
-    private fun processGameLogic() {
-        val now = System.currentTimeMillis()
+    // --- 响应逻辑 ---
 
-        // 使用时间差判定 (比 % 500 更稳定)
-        if (now - lastCheckTime >= CHECK_INTERVAL) {
-            lastCheckTime = now
+    private fun processPackageChange(packageName: String) {
+        if (blackList.contains(packageName)) {
+            // 🚨 命中黑名单：启动物理世界
+            // Log.d("PebbleEngine", "Target Detected: $packageName")
 
-            // 🕵️ 调试日志：尝试获取包名
-            // Log.v("PebbleDebug", "Checking package...")
-
-            val currentPkg = usageMonitor.getCurrentTopPackage()
-
-            if (currentPkg == null) {
-                // 如果获取不到，打印一下，看看是不是这里出了问题
-                // Log.w("PebbleDebug", "Package detection returned NULL")
-                return
+            if (!isPhysicsRunning) {
+                startPhysicsThread()
             }
+            mainHandler.post { overlayManager.setVisible(true) }
 
-            // ✅ 成功获取到包名，打印出来
-            Log.d("PebbleDebug", "Detected: $currentPkg")
+        } else {
+            // ✅ 安全应用：关闭物理世界
+            // Log.d("PebbleEngine", "Safe App: $packageName")
 
-            if (blackList.contains(currentPkg)) {
-                lastSeenBlacklistTime = now
-                mainHandler.post { overlayManager.setVisible(true) }
-
-                punishTimer += CHECK_INTERVAL
-                if (punishTimer >= PUNISH_INTERVAL) {
-                    punishTimer = 0
-                    if (!strategy.isFull()) {
-                        strategy.addRandomRock()
-                        Log.d("PebbleDebug", ">>> Rock DROP! (Screen not full)")
-                    } else {
-                        Log.d("PebbleDebug", ">>> Screen Full, waiting...")
-                    }
-                }
-            } else {
-                if (now - lastSeenBlacklistTime > GRACE_PERIOD) {
-                    punishTimer = 0
-                    mainHandler.post { overlayManager.setVisible(false) }
-                }
+            if (isPhysicsRunning) {
+                stopPhysicsThread()
+                mainHandler.post { overlayManager.setVisible(false) }
             }
         }
+    }
+
+    // --- 物理线程 (保持不变) ---
+
+    private fun startPhysicsThread() {
+        if (isPhysicsRunning) return
+        isPhysicsRunning = true
+        Log.w("PebbleEngine", "🔥 Physics Thread START")
+
+        physicsThread = Thread {
+            while (isPhysicsRunning) {
+                val start = System.currentTimeMillis()
+                try {
+                    // 1. 物理步进
+                    val finalGy = if (currentGy < MIN_GRAVITY) MIN_GRAVITY else currentGy
+                    val renderData = strategy.update(16, currentGx, finalGy)
+
+                    // 2. 渲染更新
+                    mainHandler.post { overlayManager.updateRender(renderData) }
+
+                    // 3. 自动生成石头逻辑 (放在这里比放在外部 Timer 更准)
+                    punishTimer += 16
+                    if (punishTimer >= PUNISH_INTERVAL) {
+                        punishTimer = 0
+                        if (!strategy.isFull()) {
+                            strategy.addRandomRock()
+                        }
+                    }
+
+                } catch (e: Exception) { e.printStackTrace() }
+
+                // 稳帧
+                val executionTime = System.currentTimeMillis() - start
+                val targetDelay = 16L
+                if (executionTime < targetDelay) {
+                    try { Thread.sleep(targetDelay - executionTime) } catch (e: Exception) {}
+                }
+            }
+            Log.w("PebbleEngine", "💤 Physics Thread STOP")
+        }.apply { start() }
+    }
+
+    private fun stopPhysicsThread() {
+        isPhysicsRunning = false
+        try { physicsThread?.join(200) } catch (e: Exception) {}
+        physicsThread = null
     }
 }

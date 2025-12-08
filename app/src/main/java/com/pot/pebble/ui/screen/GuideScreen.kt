@@ -1,5 +1,6 @@
 package com.pot.pebble.ui.screen
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -7,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.pot.pebble.monitor.AppUsageMonitor
+import com.pot.pebble.monitor.UsageCollector
 import com.pot.pebble.ui.theme.MossGreen
 import com.pot.pebble.ui.theme.NatureBeige
 
@@ -42,19 +44,20 @@ fun GuideScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val monitor = remember { AppUsageMonitor(context) }
-
-    // 滚动状态
     val scrollState = rememberScrollState()
 
     // 状态追踪
     var hasOverlayPermission by remember { mutableStateOf(false) }
-    var hasUsagePermission by remember { mutableStateOf(false) }
+    var hasUsagePermission by remember { mutableStateOf(false) } // 改为追踪无障碍
     var isIgnoringBatteryOpt by remember { mutableStateOf(false) }
+
+    // 辅助检查器
+    val usageCollector = remember { UsageCollector(context) }
 
     fun checkPermissions() {
         hasOverlayPermission = Settings.canDrawOverlays(context)
-        hasUsagePermission = monitor.hasPermission()
+        hasUsagePermission = usageCollector.hasPermission() // 检查
+
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         isIgnoringBatteryOpt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             pm.isIgnoringBatteryOptimizations(context.packageName)
@@ -63,6 +66,7 @@ fun GuideScreen(
         }
     }
 
+    // 生命周期监听：从设置页回来时刷新状态
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) checkPermissions()
@@ -73,7 +77,7 @@ fun GuideScreen(
 
     Scaffold(
         containerColor = NatureBeige,
-        // 🔥 按钮固定在底部
+        // 按钮吸底
         bottomBar = {
             Surface(
                 color = NatureBeige,
@@ -81,6 +85,7 @@ fun GuideScreen(
             ) {
                 Button(
                     onClick = onAllGranted,
+                    // 只有悬浮窗 + 无障碍都开启，才允许进入
                     enabled = hasOverlayPermission && hasUsagePermission,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MossGreen,
@@ -97,7 +102,6 @@ fun GuideScreen(
             }
         }
     ) { innerPadding ->
-        // 🔥 内容区域可滚动
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -115,7 +119,7 @@ fun GuideScreen(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "为了让 Pebble 稳定运行，我们需要一些特殊的权限。",
+                text = "为了精准识别应用并防止后台断连，我们需要更新权限。",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
@@ -129,7 +133,7 @@ fun GuideScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("必要权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
+                    Text("核心权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     PermissionItem(
@@ -142,11 +146,16 @@ fun GuideScreen(
                         }
                     )
                     HorizontalDivider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
+
                     PermissionItem(
-                        title = "访问使用记录",
-                        desc = "用于识别当前应用",
+                        title = "使用情况访问",
+                        desc = "用于精准感知当前应用",
                         isGranted = hasUsagePermission,
-                        onClick = { monitor.requestPermission() }
+                        onClick = {
+                            val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                            context.startActivity(intent)
+                            Toast.makeText(context, "请找到 Pebble 并允许访问", Toast.LENGTH_LONG).show()
+                        }
                     )
                 }
             }
@@ -182,15 +191,17 @@ fun GuideScreen(
                 }
             }
 
-            // 底部留白
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }
 
-// ==========================================
-// ⬇️ 补回了之前缺失的辅助组件代码 ⬇️
-// ==========================================
+// 🔧 辅助函数：检查无障碍是否开启
+fun isAccessibilityEnabled(context: Context): Boolean {
+    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+    val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
+    return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
+}
 
 @Composable
 fun PermissionItem(title: String, desc: String, isGranted: Boolean, onClick: () -> Unit) {
@@ -239,7 +250,6 @@ fun SettingsItem(title: String, desc: String, onClick: () -> Unit) {
     }
 }
 
-// 🔧 辅助方法：尝试打开各大厂商的自启动页面
 fun openAutoStartSettings(context: Context) {
     val intents = listOf(
         Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
@@ -247,7 +257,6 @@ fun openAutoStartSettings(context: Context) {
         Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity")),
         Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")),
         Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
-        // 最后的保底：应用详情页
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:${context.packageName}"))
     )
 
@@ -257,9 +266,7 @@ fun openAutoStartSettings(context: Context) {
             context.startActivity(intent)
             success = true
             break
-        } catch (e: Exception) {
-            continue
-        }
+        } catch (e: Exception) { continue }
     }
     if (!success) {
         Toast.makeText(context, "无法自动跳转，请手动在设置中开启自启动", Toast.LENGTH_LONG).show()

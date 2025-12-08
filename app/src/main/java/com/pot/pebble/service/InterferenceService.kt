@@ -7,140 +7,147 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import com.pot.pebble.core.strategy.JBox2DStrategy
 import com.pot.pebble.data.AppDatabase
 import com.pot.pebble.data.repository.AppScanner
-import com.pot.pebble.monitor.AppUsageMonitor
+import com.pot.pebble.monitor.UsageCollector
 import com.pot.pebble.service.helper.NotificationHelper
 import com.pot.pebble.service.helper.OverlayManager
 import com.pot.pebble.service.logic.GameEngine
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 
 class InterferenceService : Service(), SensorEventListener {
 
+    // ... (变量保持不变)
     private lateinit var sensorManager: SensorManager
     private lateinit var notificationHelper: NotificationHelper
     private lateinit var overlayManager: OverlayManager
     private lateinit var gameEngine: GameEngine
-
-    // 保持 Strategy 的引用，传给 Engine
-    private val strategy = JBox2DStrategy()
-
+    private lateinit var usageCollector: UsageCollector
     private lateinit var database: AppDatabase
 
-    // 定义指令常量
-    companion object {
-        const val ACTION_CLEAR_ROCKS = "com.pot.pebble.action.CLEAR"
+    private val strategy = JBox2DStrategy()
+    private var wakeLock: PowerManager.WakeLock? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Default)
+
+    // 使用高优先级的后台线程 Handler
+    private lateinit var monitorThread: HandlerThread
+    private lateinit var monitorHandler: Handler
+
+    private val POLLING_INTERVAL = 1000L
+
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            performCheck()
+            monitorHandler.postDelayed(this, POLLING_INTERVAL)
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
+        Log.i("PebbleDebug", "🚀 InterferenceService: onCreate (Dedicated Thread Mode)")
 
-        // 1. 启动前台通知 (防止崩溃)
+        // 初始化专用线程
+        monitorThread = HandlerThread("PebbleMonitorThread", android.os.Process.THREAD_PRIORITY_FOREGROUND)
+        monitorThread.start()
+        monitorHandler = Handler(monitorThread.looper)
+
+        // 唤醒锁
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Pebble:KeepAlive")
+        wakeLock?.acquire(10 * 60 * 60 * 1000L)
+
         notificationHelper = NotificationHelper(this)
         notificationHelper.startForeground()
 
-        // 2. 初始化悬浮窗
         overlayManager = OverlayManager(this)
         overlayManager.setup()
 
-        // 3. 初始化物理策略
+        usageCollector = UsageCollector(this)
+
         val metrics = resources.displayMetrics
         val statusBarHeight = getStatusBarHeight()
         val navBarHeight = getNavigationBarHeight()
-
-        // 将屏幕总高度，以及上下边距传给策略
-        strategy.setScreenSize(
-            metrics.widthPixels.toFloat(),
-            metrics.heightPixels.toFloat(),
-            statusBarHeight.toFloat(),
-            navBarHeight.toFloat() + 20f
-        )
+        strategy.setScreenSize(metrics.widthPixels.toFloat(), metrics.heightPixels.toFloat(), statusBarHeight.toFloat(), navBarHeight.toFloat() + 20f)
         strategy.onStart()
 
-        // 4. 初始化传感器
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
 
-        // 5. 启动游戏引擎 (注入依赖)
-        val usageMonitor = AppUsageMonitor(this)
-        gameEngine = GameEngine(strategy, usageMonitor, overlayManager)
+        gameEngine = GameEngine(strategy, overlayManager)
         gameEngine.start()
 
         database = AppDatabase.getDatabase(this)
-
-        // 启动协程去加载黑名单
-        CoroutineScope(Dispatchers.IO).launch {
-            // 1. 先同步一次应用列表（确保新装的App能显示）
+        serviceScope.launch {
             AppScanner(applicationContext, database.appConfigDao()).syncInstalledApps()
-
-            // 2. 获取黑名单
             val blackList = database.appConfigDao().getBlacklistedPackageList()
-
-            // 3. 传给 GameEngine
-            // 注意：你需要修改 GameEngine，让它支持 updateBlacklist() 方法
             gameEngine.updateBlacklist(blackList.toSet())
         }
 
-        // 状态同步：告诉 UI 启动
+        // 启动轮询
+        startPolling()
+
         ServiceState.isRunning.value = true
     }
 
-    // 处理指令
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_CLEAR_ROCKS) {
-            // 收到清空指令，调用引擎
-            if (::gameEngine.isInitialized) {
-                gameEngine.clearRocks()
+    private fun startPolling() {
+        monitorHandler.removeCallbacks(pollRunnable)
+        monitorHandler.post(pollRunnable)
+    }
+
+    private fun performCheck() {
+        val currentPkg = usageCollector.getTopPackageName()
+
+        if (currentPkg != null) {
+            if (ServiceState.currentPackage.value != currentPkg) {
+                Log.d("PebbleDebug", "🔍 Detected Switch: $currentPkg")
             }
+            ServiceState.currentPackage.tryEmit(currentPkg)
         }
-
-        // 保持原有逻辑：如果是系统杀掉重启，尝试重建
-        return START_STICKY
-    }
-
-    // 获取状态栏高度
-    private fun getStatusBarHeight(): Int {
-        var result = 0
-        val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
-        if (resourceId > 0) {
-            result = resources.getDimensionPixelSize(resourceId)
-        }
-        return result
-    }
-
-    // 获取导航栏高度
-    private fun getNavigationBarHeight(): Int {
-        var result = 0
-        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
-        if (resourceId > 0) {
-            result = resources.getDimensionPixelSize(resourceId)
-        }
-        return result
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        // 停止轮询并退出线程
+        monitorHandler.removeCallbacks(pollRunnable)
+        monitorThread.quitSafely()
+
         gameEngine.stop()
         overlayManager.destroy()
         sensorManager.unregisterListener(this)
         strategy.onStop()
+        if (wakeLock?.isHeld == true) wakeLock?.release()
         ServiceState.isRunning.value = false
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    // 传感器数据直接喂给 Engine
-    override fun onSensorChanged(event: SensorEvent?) {
-        event?.let {
-            gameEngine.currentGx = it.values[0]
-            gameEngine.currentGy = it.values[1]
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CLEAR_ROCKS) {
+            if (::gameEngine.isInitialized) gameEngine.clearRocks()
         }
+        return START_STICKY
     }
-
+    private fun getStatusBarHeight(): Int {
+        var result = 0
+        val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (resourceId > 0) result = resources.getDimensionPixelSize(resourceId)
+        return result
+    }
+    private fun getNavigationBarHeight(): Int {
+        var result = 0
+        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        if (resourceId > 0) result = resources.getDimensionPixelSize(resourceId)
+        return result
+    }
+    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onSensorChanged(event: SensorEvent?) {
+        event?.let { gameEngine.currentGx = it.values[0]; gameEngine.currentGy = it.values[1] }
+    }
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    companion object { const val ACTION_CLEAR_ROCKS = "com.pot.pebble.action.CLEAR" }
 }

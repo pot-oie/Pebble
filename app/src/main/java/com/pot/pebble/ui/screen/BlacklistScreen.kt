@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pot.pebble.data.entity.AppConfig
-import com.pot.pebble.service.InterferenceService // ✅ 修复 Service 引用报错
+import com.pot.pebble.service.InterferenceService
 import com.pot.pebble.ui.theme.MossGreen
 import com.pot.pebble.ui.theme.NatureBeige
 import com.pot.pebble.ui.viewmodel.BlacklistViewModel
@@ -177,7 +177,7 @@ fun AppItemCard(
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isBlacklistedSection) 4.dp else 1.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color.White
+            containerColor = Color.White // ✂️ 恢复纯白，不再判断变灰
         ),
         modifier = Modifier.fillMaxWidth().animateContentSize()
     ) {
@@ -202,8 +202,9 @@ fun AppItemCard(
                     text = app.appName,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface // ✂️ 恢复正常颜色
                 )
+
                 if (isBlacklistedSection) {
                     Text("拦截中", fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                 }
