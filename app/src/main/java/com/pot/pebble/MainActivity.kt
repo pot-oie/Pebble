@@ -2,10 +2,8 @@ package com.pot.pebble
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -13,7 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +21,7 @@ import com.pot.pebble.monitor.UsageCollector
 import com.pot.pebble.service.InterferenceService
 import com.pot.pebble.service.ServiceState
 import com.pot.pebble.ui.screen.BlacklistScreen
+import com.pot.pebble.ui.screen.FocusScreen
 import com.pot.pebble.ui.screen.GuideScreen
 import com.pot.pebble.ui.theme.MossGreen
 import com.pot.pebble.ui.theme.PebbleTheme
@@ -31,27 +29,31 @@ import com.pot.pebble.ui.theme.PebbleTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.d("PebbleDebug", "MainActivity: onCreate")
 
         setContent {
             PebbleTheme {
                 val isServiceRunning by ServiceState.isRunning.collectAsState()
                 val usageCollector = remember { UsageCollector(this) }
 
+                // 导航状态：如果服务正在运行，默认进入 Focus 页
                 var currentScreen by remember {
                     mutableStateOf(
-                        if (checkAllPermissions(this, usageCollector)) Screen.Home else Screen.Guide
+                        if (isServiceRunning) Screen.Focus
+                        else if (checkAllPermissions(this, usageCollector)) Screen.Home
+                        else Screen.Guide
                     )
+                }
+
+                // 监听服务状态，如果服务意外停止（比如在通知栏关掉），自动切回主页
+                LaunchedEffect(isServiceRunning) {
+                    if (!isServiceRunning && currentScreen == Screen.Focus) {
+                        currentScreen = Screen.Home
+                    }
                 }
 
                 when (currentScreen) {
                     Screen.Guide -> {
-                        GuideScreen(
-                            onAllGranted = {
-                                Log.d("PebbleDebug", "Guide: All Permissions Granted, moving to Home")
-                                currentScreen = Screen.Home
-                            }
-                        )
+                        GuideScreen(onAllGranted = { currentScreen = Screen.Home })
                     }
                     Screen.Home -> {
                         Scaffold(
@@ -59,20 +61,22 @@ class MainActivity : ComponentActivity() {
                                 ExtendedFloatingActionButton(
                                     onClick = {
                                         if (isServiceRunning) {
-                                            stopPebbleService()
+                                            // 逻辑上 Home 页只有“启动”按钮，
+                                            // 如果已经在运行，应该显示“回到专注页”或者直接停掉
+                                            // 这里做“启动”动作
+                                            currentScreen = Screen.Focus
                                         } else {
                                             startPebbleService()
+                                            // 启动后跳转专注页
+                                            currentScreen = Screen.Focus
                                         }
                                     },
-                                    containerColor = if (isServiceRunning) MaterialTheme.colorScheme.error else MossGreen,
+                                    containerColor = MossGreen,
                                     contentColor = Color.White
                                 ) {
-                                    Icon(
-                                        imageVector = if (isServiceRunning) Icons.Default.Close else Icons.Default.PlayArrow,
-                                        contentDescription = null
-                                    )
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text(if (isServiceRunning) "停止专注" else "启动专注")
+                                    Text("启动专注")
                                 }
                             }
                         ) { innerPadding ->
@@ -82,6 +86,15 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+                    }
+                    Screen.Focus -> {
+                        // 专注页
+                        FocusScreen(
+                            onStopFocus = {
+                                stopPebbleService()
+                                currentScreen = Screen.Home
+                            }
+                        )
                     }
                 }
             }
@@ -93,49 +106,34 @@ class MainActivity : ComponentActivity() {
         val usageCollector = UsageCollector(this)
         // 日志检查权限状态
         val hasAll = checkAllPermissions(this, usageCollector)
-        Log.d("PebbleDebug", "MainActivity: onResume (ServiceRunning=${ServiceState.isRunning.value}, Perms=$hasAll)")
 
         if (ServiceState.isRunning.value && !hasAll) {
-            Log.w("PebbleDebug", "Permissions lost while service running! Stopping...")
             stopPebbleService()
         }
     }
 
     private fun checkAllPermissions(context: Context, usageCollector: UsageCollector): Boolean {
         if (!Settings.canDrawOverlays(context)) {
-            Log.d("PebbleDebug", "❌ Missing Overlay Permission")
             return false
         }
         if (!usageCollector.hasPermission()) {
-            Log.d("PebbleDebug", "❌ Missing UsageStats Permission")
             return false
         }
         return true
     }
 
     private fun startPebbleService() {
-        Log.i("PebbleDebug", "Attempting to START service...")
-        if (!Settings.canDrawOverlays(this)) {
-            Log.e("PebbleDebug", "START failed: No overlay permission")
-            return
-        }
-
+        if (!Settings.canDrawOverlays(this)) return
         val intent = Intent(this, InterferenceService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
-        moveTaskToBack(true)
+        startForegroundService(intent)
     }
 
     private fun stopPebbleService() {
-        Log.i("PebbleDebug", "Attempting to STOP service...")
         val intent = Intent(this, InterferenceService::class.java)
         stopService(intent)
     }
 }
 
 enum class Screen {
-    Guide, Home
+    Guide, Home, Focus
 }

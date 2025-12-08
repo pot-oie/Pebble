@@ -98,6 +98,11 @@ class InterferenceService : Service(), SensorEventListener {
 
     private fun startPolling() {
         monitorHandler.removeCallbacks(pollRunnable)
+
+        // 重置统计数据
+        ServiceState.startTime.value = System.currentTimeMillis()
+        ServiceState.triggerCount.value = 0
+
         monitorHandler.post(pollRunnable)
     }
 

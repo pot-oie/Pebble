@@ -42,7 +42,7 @@ class GameEngine(
 
         Log.d("PebbleEngine", "Engine Started (Reactive Mode)")
 
-        // 🔥 核心改变：不再轮询，而是观察流
+        // 观察流
         observationJob = engineScope.launch {
             ServiceState.currentPackage.collect { currentPkg ->
                 if (currentPkg != null) {
@@ -79,18 +79,13 @@ class GameEngine(
 
     private fun processPackageChange(packageName: String) {
         if (blackList.contains(packageName)) {
-            // 🚨 命中黑名单：启动物理世界
-            // Log.d("PebbleEngine", "Target Detected: $packageName")
-
             if (!isPhysicsRunning) {
+                ServiceState.triggerCount.value += 1
                 startPhysicsThread()
             }
             mainHandler.post { overlayManager.setVisible(true) }
 
         } else {
-            // ✅ 安全应用：关闭物理世界
-            // Log.d("PebbleEngine", "Safe App: $packageName")
-
             if (isPhysicsRunning) {
                 stopPhysicsThread()
                 mainHandler.post { overlayManager.setVisible(false) }
@@ -98,7 +93,7 @@ class GameEngine(
         }
     }
 
-    // --- 物理线程 (保持不变) ---
+    // --- 物理线程 ---
 
     private fun startPhysicsThread() {
         if (isPhysicsRunning) return
@@ -109,14 +104,14 @@ class GameEngine(
             while (isPhysicsRunning) {
                 val start = System.currentTimeMillis()
                 try {
-                    // 1. 物理步进
+                    // 物理步进
                     val finalGy = if (currentGy < MIN_GRAVITY) MIN_GRAVITY else currentGy
                     val renderData = strategy.update(16, currentGx, finalGy)
 
-                    // 2. 渲染更新
+                    // 渲染更新
                     mainHandler.post { overlayManager.updateRender(renderData) }
 
-                    // 3. 自动生成石头逻辑 (放在这里比放在外部 Timer 更准)
+                    // 自动生成石头逻辑
                     punishTimer += 16
                     if (punishTimer >= PUNISH_INTERVAL) {
                         punishTimer = 0

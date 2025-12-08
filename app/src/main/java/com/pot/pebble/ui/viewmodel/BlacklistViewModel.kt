@@ -3,12 +3,14 @@ package com.pot.pebble.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.pot.pebble.common.SYSTEM_PROTECTED_PACKAGES
 import com.pot.pebble.data.AppDatabase
 import com.pot.pebble.data.entity.AppConfig
 import com.pot.pebble.data.repository.AppScanner
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -17,29 +19,48 @@ class BlacklistViewModel(application: Application) : AndroidViewModel(applicatio
     private val dao = AppDatabase.getDatabase(application).appConfigDao()
     private val scanner = AppScanner(application, dao)
 
-    // 将 Flow 转换为 StateFlow 供 UI 观察
-    // initialValue 是空列表，等待数据库加载
-    val appList: StateFlow<List<AppConfig>> = dao.getAllConfigsFlow()
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery
+
+    // 原始数据源
+    private val _allApps = dao.getAllConfigsFlow()
+
+    // 使用 map 从原始数据流中实时计算
+    val totalBlacklistedCount: StateFlow<Int> = _allApps
+        .map { list -> list.count { it.isBlacklisted } }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
+            initialValue = 0
         )
 
+    // 过滤后的显示列表
+    val appList: StateFlow<List<AppConfig>> = combine(_allApps, _searchQuery) { apps, query ->
+        if (query.isBlank()) {
+            apps
+        } else {
+            apps.filter {
+                it.appName.contains(query, ignoreCase = true) ||
+                        it.packageName.contains(query, ignoreCase = true)
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     init {
-        // 初始化时扫描已安装应用
         refreshApps()
+    }
+
+    fun onSearchQueryChanged(query: String) {
+        _searchQuery.value = query
     }
 
     fun refreshApps() {
         viewModelScope.launch {
-            // 1. 扫描安装的应用
             scanner.syncInstalledApps()
-
-            // 2. ✨ 自动修正：把误入黑名单的系统应用踢出去
-            SYSTEM_PROTECTED_PACKAGES.forEach { pkg ->
-                dao.updateStatus(pkg, false)
-            }
         }
     }
 

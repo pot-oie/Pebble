@@ -24,9 +24,7 @@ class OverlayManager(private val context: Context) {
         if (isAdded) return
 
         // 初始化通用 Type
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else WindowManager.LayoutParams.TYPE_PHONE
+        val type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
 
         // 【显示态】参数：全屏、不可点击
         visibleParams = WindowManager.LayoutParams(

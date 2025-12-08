@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Warning
@@ -43,20 +44,18 @@ fun GuideScreen(
     onAllGranted: () -> Unit
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val scrollState = rememberScrollState()
 
-    // 状态追踪
     var hasOverlayPermission by remember { mutableStateOf(false) }
-    var hasUsagePermission by remember { mutableStateOf(false) } // 改为追踪无障碍
+    var hasUsagePermission by remember { mutableStateOf(false) }
     var isIgnoringBatteryOpt by remember { mutableStateOf(false) }
 
-    // 辅助检查器
     val usageCollector = remember { UsageCollector(context) }
 
     fun checkPermissions() {
         hasOverlayPermission = Settings.canDrawOverlays(context)
-        hasUsagePermission = usageCollector.hasPermission() // 检查
+        hasUsagePermission = usageCollector.hasPermission()
 
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         isIgnoringBatteryOpt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -66,7 +65,6 @@ fun GuideScreen(
         }
     }
 
-    // 生命周期监听：从设置页回来时刷新状态
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) checkPermissions()
@@ -77,7 +75,6 @@ fun GuideScreen(
 
     Scaffold(
         containerColor = NatureBeige,
-        // 按钮吸底
         bottomBar = {
             Surface(
                 color = NatureBeige,
@@ -85,7 +82,6 @@ fun GuideScreen(
             ) {
                 Button(
                     onClick = onAllGranted,
-                    // 只有悬浮窗 + 无障碍都开启，才允许进入
                     enabled = hasOverlayPermission && hasUsagePermission,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MossGreen,
@@ -97,7 +93,7 @@ fun GuideScreen(
                         .height(56.dp),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Text("进入花园", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("开始使用", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -113,13 +109,13 @@ fun GuideScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "开始之前的准备",
+                text = "权限设置",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "为了精准识别应用并防止后台断连，我们需要更新权限。",
+                text = "Pebble 需要以下权限以正常运行检测与干扰功能。",
                 fontSize = 16.sp,
                 color = Color.Gray
             )
@@ -133,12 +129,12 @@ fun GuideScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("核心权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
+                    Text("必要权限", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     PermissionItem(
-                        title = "显示悬浮窗",
-                        desc = "用于显示落石",
+                        title = "悬浮窗权限",
+                        desc = "用于显示干扰元素",
                         isGranted = hasOverlayPermission,
                         onClick = {
                             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
@@ -149,7 +145,7 @@ fun GuideScreen(
 
                     PermissionItem(
                         title = "使用情况访问",
-                        desc = "用于精准感知当前应用",
+                        desc = "用于识别当前前台应用",
                         isGranted = hasUsagePermission,
                         onClick = {
                             val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
@@ -167,13 +163,13 @@ fun GuideScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("防杀设置 (推荐)", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
-                    Text("防止服务被系统误杀", fontSize = 12.sp, color = Color.Gray)
+                    Text("后台保活 (推荐)", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MossGreen)
+                    Text("防止服务被系统暂停导致检测失效", fontSize = 12.sp, color = Color.Gray)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     PermissionItem(
-                        title = "电池优化 (无限制)",
-                        desc = "允许后台运行",
+                        title = "忽略电池优化",
+                        desc = "允许后台持续运行",
                         isGranted = isIgnoringBatteryOpt,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -184,8 +180,8 @@ fun GuideScreen(
                     )
                     HorizontalDivider(color = NatureBeige, thickness = 1.dp, modifier = Modifier.padding(vertical = 8.dp))
                     SettingsItem(
-                        title = "自启动权限",
-                        desc = "小米/OV必须开启",
+                        title = "自启动管理",
+                        desc = "请手动开启自启动权限",
                         onClick = { openAutoStartSettings(context) }
                     )
                 }
@@ -194,13 +190,6 @@ fun GuideScreen(
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
-}
-
-// 🔧 辅助函数：检查无障碍是否开启
-fun isAccessibilityEnabled(context: Context): Boolean {
-    val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-    val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
-    return enabledServices.any { it.resolveInfo.serviceInfo.packageName == context.packageName }
 }
 
 @Composable
@@ -246,7 +235,7 @@ fun SettingsItem(title: String, desc: String, onClick: () -> Unit) {
             Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(desc, fontSize = 12.sp, color = Color.Gray)
         }
-        Icon(Icons.Default.KeyboardArrowRight, contentDescription = null, tint = Color.Gray)
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.Gray)
     }
 }
 
@@ -269,8 +258,6 @@ fun openAutoStartSettings(context: Context) {
         } catch (e: Exception) { continue }
     }
     if (!success) {
-        Toast.makeText(context, "无法自动跳转，请手动在设置中开启自启动", Toast.LENGTH_LONG).show()
-    } else {
-        Toast.makeText(context, "请找到 Pebble 并开启【自启动】", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "无法跳转，请手动在设置中查找", Toast.LENGTH_LONG).show()
     }
 }
