@@ -1,62 +1,117 @@
 package com.pot.pebble.service.logic
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.pot.pebble.core.model.EntityType
+import com.pot.pebble.core.model.RenderEntity
 import com.pot.pebble.core.strategy.JBox2DStrategy
+import com.pot.pebble.data.AppDatabase
+import com.pot.pebble.data.ThemeStore
+import com.pot.pebble.data.entity.InterferenceLog
 import com.pot.pebble.service.ServiceState
 import com.pot.pebble.service.helper.OverlayManager
 import kotlinx.coroutines.*
+import java.util.concurrent.CopyOnWriteArrayList
 
 class GameEngine(
+    private val context: Context,
     private val strategy: JBox2DStrategy,
     private val overlayManager: OverlayManager
 ) {
 
-    // 协程作用域：用于监听状态流
     private val engineScope = CoroutineScope(Dispatchers.Default)
     private var observationJob: Job? = null
 
-    // 物理线程：只在惩罚时启动
     private var physicsThread: Thread? = null
     @Volatile private var isPhysicsRunning = false
-
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val PUNISH_INTERVAL = 2000L
+    private val PUNISH_INTERVAL = 600L
     private var punishTimer = 0L
 
-    // 黑名单
     private var blackList: Set<String> = emptySet()
 
-    // 传感器数据
     @Volatile var currentGx = 0f
     @Volatile var currentGy = 0f
     private val MIN_GRAVITY = 5.0f
 
-    /**
-     * 启动引擎：开始监听无障碍服务的信号
-     */
-    fun start() {
-        if (observationJob?.isActive == true) return
+    var currentMode: EntityType = EntityType.CIRCLE
 
-        Log.d("PebbleEngine", "Engine Started (Reactive Mode)")
+    private val staticEntities = CopyOnWriteArrayList<RenderEntity>()
 
-        // 观察流
-        observationJob = engineScope.launch {
-            ServiceState.currentPackage.collect { currentPkg ->
-                if (currentPkg != null) {
-                    processPackageChange(currentPkg)
+    private val analyticsDao = AppDatabase.getDatabase(context).analyticsDao()
+
+    init {
+        ThemeStore.init(context)
+
+        // 监听主题
+        engineScope.launch {
+            ThemeStore.currentTheme.collect { theme ->
+                currentMode = theme
+                // 每次切主题，最好清空一下之前的残留
+                if (theme != EntityType.CRACK) {
+                    strategy.clearAllBodies()
+                    mainHandler.post { overlayManager.updateRender(emptyList()) }
+                }
+            }
+        }
+
+        // 监听弹幕
+        engineScope.launch {
+            ThemeStore.danmakuList.collect { list -> strategy.updateDanmakuList(list) }
+        }
+
+        // 监听图片并计算比例
+        engineScope.launch {
+            ThemeStore.customImageUri.collect { uriString ->
+                if (uriString != null) {
+                    // 计算宽高比
+                    val ratio = calculateAspectRatio(uriString)
+                    // 调用新方法 updateCustomImage (带比例参数)
+                    strategy.updateCustomImage(uriString, ratio)
+                    Log.d("PebbleEngine", "Custom Image Updated: ratio=$ratio")
+                } else {
+                    strategy.updateCustomImage(null, 1.0f)
                 }
             }
         }
     }
 
-    /**
-     * 停止引擎
-     */
+    // 辅助方法，只读取图片尺寸，不加载内容（高效）
+    private fun calculateAspectRatio(uriString: String): Float {
+        return try {
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true // 关键：只读尺寸
+            }
+            val inputStream = context.contentResolver.openInputStream(Uri.parse(uriString))
+            BitmapFactory.decodeStream(inputStream, null, options)
+            inputStream?.close()
+
+            if (options.outWidth > 0 && options.outHeight > 0) {
+                options.outWidth.toFloat() / options.outHeight.toFloat()
+            } else {
+                1.0f
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            1.0f
+        }
+    }
+
+    fun start() {
+        if (observationJob?.isActive == true) return
+        observationJob = engineScope.launch {
+            ServiceState.currentPackage.collect { currentPkg ->
+                if (currentPkg != null) processPackageChange(currentPkg)
+            }
+        }
+    }
+
     fun stop() {
-        Log.d("PebbleEngine", "Engine Stopped")
         observationJob?.cancel()
         stopPhysicsThread()
         mainHandler.post { overlayManager.setVisible(false) }
@@ -64,72 +119,90 @@ class GameEngine(
 
     fun updateBlacklist(newSet: Set<String>) {
         this.blackList = newSet
-        // 黑名单更新时，手动触发一次检查当前状态
         val current = ServiceState.currentPackage.value
-        if (current != null) {
-            engineScope.launch { processPackageChange(current) }
-        }
+        if (current != null) engineScope.launch { processPackageChange(current) }
     }
 
     fun clearRocks() {
         strategy.clearAllBodies()
+        staticEntities.clear()
+        mainHandler.post { overlayManager.updateRender(emptyList()) }
     }
-
-    // --- 响应逻辑 ---
 
     private fun processPackageChange(packageName: String) {
         if (blackList.contains(packageName)) {
             if (!isPhysicsRunning) {
+                if (currentMode != EntityType.CRACK) strategy.clearAllBodies()
                 ServiceState.triggerCount.value += 1
-                startPhysicsThread()
+                startPhysicsThread(packageName)
             }
             mainHandler.post { overlayManager.setVisible(true) }
-
         } else {
             if (isPhysicsRunning) {
                 stopPhysicsThread()
+                staticEntities.clear()
                 mainHandler.post { overlayManager.setVisible(false) }
             }
         }
     }
 
-    // --- 物理线程 ---
-
-    private fun startPhysicsThread() {
+    private fun startPhysicsThread(packageName: String) {
         if (isPhysicsRunning) return
         isPhysicsRunning = true
-        Log.w("PebbleEngine", "🔥 Physics Thread START")
+
+        engineScope.launch {
+            analyticsDao.insertLog(
+                InterferenceLog(
+                    timestamp = System.currentTimeMillis(),
+                    type = 0,
+                    packageName = packageName
+                )
+            )
+        }
 
         physicsThread = Thread {
+            var lastTime = System.currentTimeMillis()
+
             while (isPhysicsRunning) {
-                val start = System.currentTimeMillis()
+                val now = System.currentTimeMillis()
+                val dt = now - lastTime
+                lastTime = now
+                val safeDt = if (dt > 50) 50 else dt
+
                 try {
-                    // 物理步进
-                    val finalGy = if (currentGy < MIN_GRAVITY) MIN_GRAVITY else currentGy
-                    val renderData = strategy.update(16, currentGx, finalGy)
+                    val finalRenderList: List<RenderEntity>
 
-                    // 渲染更新
-                    mainHandler.post { overlayManager.updateRender(renderData) }
-
-                    // 自动生成石头逻辑
-                    punishTimer += 16
-                    if (punishTimer >= PUNISH_INTERVAL) {
-                        punishTimer = 0
-                        if (!strategy.isFull()) {
-                            strategy.addRandomRock()
+                    if (currentMode == EntityType.CRACK) {
+                        punishTimer += dt
+                        if (punishTimer >= 2000) {
+                            punishTimer = 0
+                            val crack = strategy.createStaticCrack()
+                            if (crack != null) staticEntities.add(crack)
                         }
+                        finalRenderList = staticEntities
+                    } else {
+                        val finalGy = if (currentGy < MIN_GRAVITY) MIN_GRAVITY else currentGy
+                        val physicsEntities = strategy.update(safeDt, currentGx, finalGy)
+
+                        punishTimer += dt
+                        if (punishTimer >= PUNISH_INTERVAL) {
+                            punishTimer = 0
+                            if (!strategy.isFull()) {
+                                strategy.spawnObstacle(currentMode)
+                            }
+                        }
+                        finalRenderList = physicsEntities
                     }
+                    mainHandler.post { overlayManager.updateRender(finalRenderList) }
 
                 } catch (e: Exception) { e.printStackTrace() }
 
-                // 稳帧
-                val executionTime = System.currentTimeMillis() - start
+                val executionTime = System.currentTimeMillis() - now
                 val targetDelay = 16L
                 if (executionTime < targetDelay) {
                     try { Thread.sleep(targetDelay - executionTime) } catch (e: Exception) {}
                 }
             }
-            Log.w("PebbleEngine", "💤 Physics Thread STOP")
         }.apply { start() }
     }
 

@@ -3,7 +3,6 @@ package com.pot.pebble.monitor
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
-import android.util.Log
 
 class UsageCollector(private val context: Context) {
 
@@ -21,7 +20,7 @@ class UsageCollector(private val context: Context) {
 
     fun getTopPackageName(): String? {
         val endTime = System.currentTimeMillis()
-        // 查过去 10 秒。
+        // 保持 10秒 窗口，这是最稳的
         val startTime = endTime - 1000 * 10
 
         val events = usageStatsManager.queryEvents(startTime, endTime)
@@ -34,7 +33,6 @@ class UsageCollector(private val context: Context) {
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
 
-            // 逻辑不变，依然只看 ACTIVITY_RESUMED
             if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
                 if (event.timeStamp > lastTimeStamp) {
                     lastTimeStamp = event.timeStamp

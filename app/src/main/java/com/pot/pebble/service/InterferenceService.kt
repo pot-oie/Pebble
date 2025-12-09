@@ -23,7 +23,6 @@ import kotlinx.coroutines.*
 
 class InterferenceService : Service(), SensorEventListener {
 
-    // ... (变量保持不变)
     private lateinit var sensorManager: SensorManager
     private lateinit var notificationHelper: NotificationHelper
     private lateinit var overlayManager: OverlayManager
@@ -35,11 +34,12 @@ class InterferenceService : Service(), SensorEventListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(Dispatchers.Default)
 
-    // 使用高优先级的后台线程 Handler
     private lateinit var monitorThread: HandlerThread
     private lateinit var monitorHandler: Handler
 
     private val POLLING_INTERVAL = 1000L
+
+    private var cachedBlacklist = emptySet<String>()
 
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -50,14 +50,12 @@ class InterferenceService : Service(), SensorEventListener {
 
     override fun onCreate() {
         super.onCreate()
-        Log.i("PebbleDebug", "🚀 InterferenceService: onCreate (Dedicated Thread Mode)")
+        Log.i("PebbleDebug", "🚀 InterferenceService: onCreate")
 
-        // 初始化专用线程
         monitorThread = HandlerThread("PebbleMonitorThread", android.os.Process.THREAD_PRIORITY_FOREGROUND)
         monitorThread.start()
         monitorHandler = Handler(monitorThread.looper)
 
-        // 唤醒锁
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Pebble:KeepAlive")
         wakeLock?.acquire(10 * 60 * 60 * 1000L)
@@ -80,49 +78,44 @@ class InterferenceService : Service(), SensorEventListener {
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
 
-        gameEngine = GameEngine(strategy, overlayManager)
+        // GameEngine 会自己去读取最新的主题配置
+        gameEngine = GameEngine(applicationContext, strategy, overlayManager)
         gameEngine.start()
 
         database = AppDatabase.getDatabase(this)
         serviceScope.launch {
             AppScanner(applicationContext, database.appConfigDao()).syncInstalledApps()
             val blackList = database.appConfigDao().getBlacklistedPackageList()
-            gameEngine.updateBlacklist(blackList.toSet())
+            cachedBlacklist = blackList.toSet()
+            gameEngine.updateBlacklist(cachedBlacklist)
         }
 
-        // 启动轮询
         startPolling()
-
         ServiceState.isRunning.value = true
     }
 
     private fun startPolling() {
         monitorHandler.removeCallbacks(pollRunnable)
-
-        // 重置统计数据
         ServiceState.startTime.value = System.currentTimeMillis()
         ServiceState.triggerCount.value = 0
-
         monitorHandler.post(pollRunnable)
     }
 
     private fun performCheck() {
-        val currentPkg = usageCollector.getTopPackageName()
+        // 回归最简单的检查逻辑
+        val detectedPkg = usageCollector.getTopPackageName()
 
-        if (currentPkg != null) {
-            if (ServiceState.currentPackage.value != currentPkg) {
-                Log.d("PebbleDebug", "🔍 Detected Switch: $currentPkg")
-            }
-            ServiceState.currentPackage.tryEmit(currentPkg)
+        // 只要检测到包名变化，就更新状态
+        if (detectedPkg != null && ServiceState.currentPackage.value != detectedPkg) {
+            Log.d("PebbleDebug", "🔍 Switch Detected: $detectedPkg")
+            ServiceState.currentPackage.tryEmit(detectedPkg)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // 停止轮询并退出线程
         monitorHandler.removeCallbacks(pollRunnable)
         monitorThread.quitSafely()
-
         gameEngine.stop()
         overlayManager.destroy()
         sensorManager.unregisterListener(this)
@@ -133,7 +126,7 @@ class InterferenceService : Service(), SensorEventListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_CLEAR_ROCKS) {
-            if (::gameEngine.isInitialized) gameEngine.clearRocks()
+            gameEngine.clearRocks()
         }
         return START_STICKY
     }

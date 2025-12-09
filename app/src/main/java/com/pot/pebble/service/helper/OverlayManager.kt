@@ -88,6 +88,8 @@ class OverlayManager(private val context: Context) {
         }
     }
 
+    fun getContext() = context
+
     fun destroy() {
         if (isAdded) {
             windowManager.removeView(overlayView)
